@@ -15,6 +15,8 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+indicatif = "0.17"
+reqwest = { version = "0.11", features = ["blocking", "rustls-tls"] }
 tauri-build = { version = "2.5.3", features = [] }
 
 [dependencies]
@@ -29,3 +31,4 @@ rust-bert = "0.23.0"
 console = { version = "0.16.1", features = ['std'] }
 tch = "0.17.0"
 anyhow = "1.0.100"
+llama-cpp-2 = { version = "0.1.130", features = ["vulkan"] }

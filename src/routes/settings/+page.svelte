@@ -20,3 +20,6 @@
 <p class="text-muted-foreground text-xl leading-7 not-first:mt-6">
     Manage your bot configurations and preferences.
 </p>
+
+
+<ThemeToggle/>

@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../public",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run build"
   },
   "app": {
     "windows": [
@@ -31,7 +31,7 @@
       "icons/310x310.png"
     ],
     "resources": {
-      "m2m100_model/": "m2m100_model/"
+      "model/": "model/"
     }
   }
 }
