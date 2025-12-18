@@ -16,19 +16,31 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 indicatif = "0.17"
-reqwest = { version = "0.11", features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
 tauri-build = { version = "2.5.3", features = [] }
 
 [dependencies]
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.9.5", features = [] }
 tauri-plugin-log = "2"
 lingua = "1.7.2"
-rust-bert = "0.23.0"
-# need it for some dependency of rust-bert. Very fucked up fix.
-console = { version = "0.16.1", features = ['std'] }
-tch = "0.17.0"
 anyhow = "1.0.100"
 llama-cpp-2 = { version = "0.1.130", features = ["vulkan"] }
+aho-corasick = "1.1.4"
+once_cell = "1.21.3"
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
+tauri-plugin-store = "2"
+twitch_api = { version = "0.7.2", features = ["eventsub", "helix", "reqwest"] }
+twitch_oauth2 = { version = "0.15.0", features = ["client"] }
+tokio-tungstenite = { version = "0.28.0", features = ["native-tls", "url"] }
+tracing = "0.1.43"
+tracing-subscriber = "0.3.22"
+futures = "0.3.31"
+serde_derive = "1.0.228"
+clap = "4.5.53"
+color-eyre = "0.6.5"
+eyre = "0.6.12"
+tauri-plugin-opener = "2"

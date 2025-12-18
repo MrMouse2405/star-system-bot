@@ -1,34 +1,33 @@
-use std::num::NonZeroU32;
-use std::path::PathBuf;
-use std::string::ToString;
-use std::sync::{Arc, Mutex};
-
-use crate::RefiningModelState;
-use crate::TranslationResponse;
-
 use anyhow::Context;
 use anyhow::Result;
+use std::num::NonZeroU32;
 
 use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
 
 use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 
-use rust_bert::m2m_100::M2M100SourceLanguages;
-use rust_bert::pipelines::common::ModelResource;
-use rust_bert::pipelines::translation::{
-    Language as BertLang, TranslationConfig, TranslationModel,
-};
-use rust_bert::resources::LocalResource;
-use rust_bert::RustBertError;
-
 use tauri::path::BaseDirectory;
 use tauri::Manager;
 
-use tch::Device;
+use crate::slang_fr;
+use crate::slang_jp;
+use crate::slang_zh;
+use crate::TranslationModelState;
+use crate::TranslationResponse;
+
+// --- WRAPPER FOR THREAD SAFETY ---
+// We wrap LlamaContext to implement Send + Sync manually.
+// This is safe because we guard access with a Mutex in main.rs.
+pub struct ThreadSafeContext(pub LlamaContext<'static>);
+
+unsafe impl Send for ThreadSafeContext {}
+unsafe impl Sync for ThreadSafeContext {}
+// ---------------------------------
 
 pub fn initialize_lingua() -> LanguageDetector {
     let languages = vec![
@@ -36,96 +35,39 @@ pub fn initialize_lingua() -> LanguageDetector {
         Language::French,
         Language::Japanese,
         Language::Chinese,
-        Language::Spanish,
     ];
-    let detector: LanguageDetector = LanguageDetectorBuilder::from_languages(&languages)
+    LanguageDetectorBuilder::from_languages(&languages)
         .with_preloaded_language_models()
-        .build();
-
-    detector
-}
-
-#[deprecated]
-#[allow(dead_code)]
-pub fn initialize_translation_model() -> Result<TranslationModel, RustBertError> {
-    let model_path = PathBuf::from("model/rust_model.ot");
-    let config_path = PathBuf::from("model/config.json");
-    let vocab_path = PathBuf::from("model/vocab.json");
-    let spm_path = PathBuf::from("model/sentencepiece.bpe.model");
-    let model_resource = LocalResource {
-        local_path: model_path,
-    };
-
-    let config_resource = LocalResource {
-        local_path: config_path,
-    };
-    let vocab_resource = LocalResource {
-        local_path: vocab_path,
-    };
-    let merges_resource = LocalResource {
-        local_path: spm_path,
-    };
-    let translation_config = TranslationConfig::new(
-        rust_bert::pipelines::common::ModelType::M2M100,
-        ModelResource::Torch(Box::new(model_resource)),
-        config_resource,
-        vocab_resource,
-        Some(merges_resource),
-        M2M100SourceLanguages::M2M100_418M,
-        [BertLang::English],
-        Device::Vulkan,
-    );
-    Ok(TranslationModel::new(translation_config)?)
-}
-
-pub fn initialize_translation_model_from_app_handle(
-    app_handle: &tauri::AppHandle,
-) -> Result<TranslationModel> {
-    let model_path = app_handle
-        .path()
-        .resolve("model/rust_model.ot", BaseDirectory::Resource)?;
-    let config_path = app_handle
-        .path()
-        .resolve("model/config.json", BaseDirectory::Resource)?;
-    let vocab_path = app_handle
-        .path()
-        .resolve("model/vocab.json", BaseDirectory::Resource)?;
-    let spm_path = app_handle
-        .path()
-        .resolve("model/sentencepiece.bpe.model", BaseDirectory::Resource)?;
-    let model_resource = LocalResource {
-        local_path: model_path,
-    };
-    let config_resource = LocalResource {
-        local_path: config_path,
-    };
-    let vocab_resource = LocalResource {
-        local_path: vocab_path,
-    };
-    let merges_resource = LocalResource {
-        local_path: spm_path,
-    };
-    let translation_config = TranslationConfig::new(
-        rust_bert::pipelines::common::ModelType::M2M100,
-        ModelResource::Torch(Box::new(model_resource)),
-        config_resource,
-        vocab_resource,
-        Some(merges_resource),
-        [
-            BertLang::Chinese,
-            BertLang::French,
-            BertLang::Japanese,
-            BertLang::Spanish,
-            BertLang::English,
-        ],
-        [BertLang::English],
-        Device::cuda_if_available(),
-    );
-    Ok(TranslationModel::new(translation_config)?)
+        .build()
 }
 
 pub fn initialize_llama_backend() -> Result<LlamaBackend> {
     Ok(LlamaBackend::init()?)
+}
+
+// We use unsafe to extend the lifetime to 'static because we know
+// the Model is stored in an Arc alongside the Context, so it won't drop early.
+pub fn initialize_llama_context(
+    backend: &LlamaBackend,
+    model: &LlamaModel,
+) -> Result<ThreadSafeContext> {
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(Some(NonZeroU32::new(2048).unwrap()))
+        .with_n_batch(2048)
+        .with_n_ubatch(2048)
+        .with_n_threads(4)
+        .with_n_threads_batch(4);
+
+    let ctx = model
+        .new_context(backend, ctx_params)
+        .context("Failed to create llama context")?;
+
+    // SAFETY: We are forcefully extending the lifetime to 'static.
+    // This is necessary to store it in the Tauri state.
+    // It remains safe as long as 'model' (in Arc) lives as long as 'ctx'.
+    let static_ctx: LlamaContext<'static> = unsafe { std::mem::transmute(ctx) };
+
+    Ok(ThreadSafeContext(static_ctx))
 }
 
 pub fn initialize_llm_from_app_handle(
@@ -134,143 +76,79 @@ pub fn initialize_llm_from_app_handle(
 ) -> Result<LlamaModel> {
     let model_path = app_handle
         .path()
-        .resolve("model/Qwen3-8B-Q5_K_M.gguf", BaseDirectory::Resource)
+        .resolve("model/Qwen3-8B-Q4_K_M.gguf", BaseDirectory::Resource)
         .context("Failed to resolve path to Qwen model")?;
 
-    let params = LlamaModelParams::default();
+    let params = LlamaModelParams::default().with_n_gpu_layers(999);
     let model = LlamaModel::load_from_file(backend, &model_path, &params)
         .context("Failed to load Qwen model from file")?;
 
     Ok(model)
 }
 
-pub fn process_message(
-    text: &str,
-    detector: &LanguageDetector,
-    translation_model: &Arc<Mutex<TranslationModel>>,
-    refining_model: &RefiningModelState,
-) -> Result<TranslationResponse, String> {
-    let detected_lang = detector
-        .detect_language_of(text)
-        .ok_or_else(|| "Unknown Language".to_string())?;
-
-    if detected_lang == Language::English {
-        return Ok(TranslationResponse {
-            language: detected_lang.to_string(),
-            translation: text.to_string(),
-        });
-    }
-
-    let source_bert_lang = match detected_lang {
-        Language::French => Some(BertLang::French),
-        Language::Spanish => Some(BertLang::Spanish),
-        Language::Japanese => Some(BertLang::Japanese),
-        Language::Chinese => Some(BertLang::Chinese),
-        _ => None,
-    };
-
-    let src = source_bert_lang.ok_or_else(|| {
-        "Language supported by detection but not mapped to translator".to_string()
-    })?;
-
-    let translation_model = translation_model
-        .lock()
-        .map_err(|e| format!("Failed to lock m2m100 model: {}", e))?;
-
-    let output_vec = translation_model
-        .translate(&[text], src, BertLang::English)
-        // Ensure RustBertError implements Display for easy conversion to String
-        .map_err(|err: RustBertError| format!("Bert Translation Error: {:?}", err).to_string())?;
-
-    let translated_text = output_vec
-        .first()
-        .ok_or_else(|| "Empty Response: Translation vector was empty".to_string())?;
-
-    Ok(TranslationResponse {
-        language: detected_lang.to_string(),
-        translation: translated_text.to_string(),
-    })
-}
-
-pub fn refine_with_qwen(
-    backend: &LlamaBackend,
+pub fn localize_with_qwen(
     model: &LlamaModel,
-    original_lang: &str,
-    literal_text: &str,
+    wrapped_ctx: &mut ThreadSafeContext, // Accept the wrapper
+    source_lang: &str,
+    raw_text: &str,
 ) -> Result<String> {
-    let mut ctx = model
-        .new_context(
-            backend,
-            LlamaContextParams::default().with_n_ctx(NonZeroU32::new(2048)),
-        )
-        .context("Failed to create llama context")?;
+    let ctx = &mut wrapped_ctx.0; // Access internal context
+
+    ctx.clear_kv_cache();
+
+    let n_ctx = NonZeroU32::new(2048).unwrap();
 
     let prompt = format!(
         r#"<|im_start|>system
-Rewrite literal machine-translated chat text from {language} into natural English.
-Source is informal online chat (e.g., Twitch comments).
-Fix literal slang and idioms.
-Keep the same meaning and casual tone.
-Do not explain or add information.
-Output one natural English sentence only.
-If slang is translated literally, replace it with common English internet phrasing.
-<|im_end|>
-
+Localize {language} gaming chat to natural, informal English.
+Adapt slang/idioms to Western gaming terms (e.g., 'lol', 'choke', 'clutch').
+Maintain the user's tone. Output translation only.<|im_end|>
 <|im_start|>user
-{literal}
+{raw_input}
 <|im_end|>
-
 <|im_start|>assistant"#,
-        language = original_lang,
-        literal = literal_text
+        language = source_lang,
+        raw_input = raw_text
     );
 
-    let tokens_list = model
+    let prompt_tokens = model
         .str_to_token(&prompt, AddBos::Always)
         .context("Failed to tokenize prompt")?;
 
     let mut batch = LlamaBatch::new(2048, 1);
 
-    // Load the prompt into the batch
-    let last_index = tokens_list.len() as i32 - 1;
-    for (i, token) in tokens_list.iter().enumerate() {
-        // We only need logits (predictions) for the very last token of the prompt
-        let is_logits = i as i32 == last_index;
-        batch.add(*token, i as i32, &[0], is_logits)?;
+    let last_index = prompt_tokens.len() as i32 - 1;
+    for (i, token) in prompt_tokens.iter().enumerate() {
+        let is_last = i as i32 == last_index;
+        batch.add(*token, i as i32, &[0], is_last)?;
     }
 
-    // Decode the batch (eval)
     ctx.decode(&mut batch).context("Failed to decode prompt")?;
 
-    // --- Generation Loop ---
-    let mut output_string = String::new();
-    let max_new_tokens = 4056;
-    let mut n_curr = batch.n_tokens(); // Track total tokens processed
+    let mut response_bytes = Vec::<u8>::with_capacity(4096);
+    let max_new_tokens = 1024;
+    let mut n_curr = batch.n_tokens();
 
     for _ in 0..max_new_tokens {
-        let batch_logits_index = if batch.n_tokens() > 1 {
-            batch.n_tokens() - 1
-        } else {
-            0
-        };
+        if n_curr as u32 >= n_ctx.get() {
+            break;
+        }
 
-        let candidates = ctx.candidates_ith(batch_logits_index);
+        let last_token_idx = batch.n_tokens() - 1;
+        let candidates = ctx.candidates_ith(last_token_idx);
 
-        // Simple Greedy Sampling: Find the token with the highest logit
         let next_token = candidates
             .max_by(|a, b| a.logit().partial_cmp(&b.logit()).unwrap())
             .map(|data| data.id())
             .unwrap_or(model.token_eos());
 
-        // Check for EOS
         if next_token == model.token_eos() {
             break;
         }
 
-        let piece = model.token_to_str(next_token, Special::Tokenize)?;
-        output_string.push_str(&piece);
+        let piece = model.token_to_bytes(next_token, Special::Tokenize)?;
+        response_bytes.extend(piece);
 
-        // Prepare the next batch: it contains only the new token
         batch.clear();
         batch.add(next_token, n_curr, &[0], true)?;
 
@@ -278,22 +156,128 @@ If slang is translated literally, replace it with common English internet phrasi
         n_curr += 1;
     }
 
-    // Qwen3 produces chain of thought! <think> .. </think>
-    // We get rid of it!
-    let clean_output = if let Some(index) = output_string.find("</think>") {
-        // "index" is where < starts. We add 8 to skip "</think>" length.
-        let start_of_text = index + 8;
-        if start_of_text < output_string.len() {
-            output_string[start_of_text..].to_string()
+    let full_response = String::from_utf8_lossy(&response_bytes).to_string();
+
+    let clean_output = if let Some(end_tag_pos) = full_response.find("</think>") {
+        let start_of_text = end_tag_pos + 8;
+        if start_of_text < full_response.len() {
+            full_response[start_of_text..].to_string()
         } else {
-            String::new() // Model stopped right after thinking
+            String::new()
         }
     } else {
-        // If no </think> tag found, the model likely didn't output a thought block
-        // or (edge case) it started thinking but hit max tokens.
-        // We return the original string, possibly stripping a leading <think> if needed.
-        String::from("<error>")
+        if let Some(_) = full_response.find("<think>") {
+            return Ok(String::from("<error: I thought too hard>"));
+        }
+        String::new()
     };
 
     Ok(clean_output.trim().to_string())
+}
+
+pub async fn perform_translation(
+    text: String,
+    state: &TranslationModelState,
+) -> Result<TranslationResponse, String> {
+    // FAST PATH: Check for slang/abbreviations immediately
+    if is_universal_slang(&text) {
+        return Ok(TranslationResponse {
+            language: "English".into(),
+            translation: text,
+        });
+    }
+
+    // Check if it's English!
+    let detected_lang = state
+        .detector
+        .detect_language_of(&text)
+        .ok_or_else(|| "Unknown Language".to_string())?;
+
+    //  If it is, then we skip!
+    let processed_text = match detected_lang {
+        Language::Chinese => slang_zh::normalize_mandarin_slang(&text),
+        Language::Japanese => slang_jp::normalize_japanese_slang(&text),
+        Language::French => slang_fr::normalize_french_slang(&text),
+        Language::English => {
+            return Ok(TranslationResponse {
+                language: "English".into(),
+                translation: text,
+            })
+        }
+        _ => text.clone(),
+    };
+
+    let language_label = detected_lang.to_string();
+
+    // We clone the Arcs here so they can be moved into the spawn_blocking closure
+    let llm_state = state.llm_state.clone();
+    let semaphore = state.semaphore.clone();
+
+    // Acquire semaphore (Async wait)
+    let _permit = semaphore
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("Semaphore Error: {}", e))?;
+
+    // Run inference (Blocking thread)
+    let translation = tauri::async_runtime::spawn_blocking(move || {
+        let mut ctx = {
+            let mut pool = llm_state
+                .context_pool
+                .lock()
+                .map_err(|_| "Poisoned lock")
+                .unwrap();
+            pool.pop().expect("Semaphore logic failed: Pool was empty!")
+        };
+
+        let result =
+            localize_with_qwen(&llm_state.model, &mut ctx, &language_label, &processed_text);
+
+        {
+            let mut pool = llm_state
+                .context_pool
+                .lock()
+                .map_err(|_| "Poisoned lock")
+                .unwrap();
+            pool.push(ctx);
+        }
+
+        result
+    })
+    .await
+    .map_err(|e| format!("Task Join Error: {}", e))?
+    .map_err(|e| format!("LLM Inference Error: {}", e))?;
+
+    Ok(TranslationResponse {
+        language: detected_lang.to_string(),
+        translation,
+    })
+}
+
+fn is_universal_slang(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+
+    // We split by whitespace to handle messages like "LUL LUL LUL"
+    text.split_whitespace().all(|token| {
+        // Remove common punctuation to handle "LMAO!" or "WTF?"
+        // This will also remove emojis!
+        // and emoticons :)
+        let clean_token: String = token.chars().filter(|c| c.is_alphanumeric()).collect();
+
+        if clean_token.is_empty() {
+            return true;
+        }
+
+        // Check against a hardcoded list of universal slang
+        match clean_token.to_uppercase().as_str() {
+            "LMAO" | "LMFAO" | "LOL" | "ROFL" | "LUL" | "KEKW" | "OMEGALUL" | "POG" | "POGGERS"
+            | "POGCHAMP" | "KAPPA" | "MONKAW" | "MONKAS" | "PEPELAUGH" | "SADGE" | "BRUH"
+            | "WTF" | "OMG" | "IDK" | "XD" | "XDD" | "HA" | "HAHA" | "HAHAHA" | "JAJA"
+            | "JAJAJA" | "MDR" | "L" => true,
+            _ => false,
+        }
+    })
 }

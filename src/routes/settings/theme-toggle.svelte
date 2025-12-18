@@ -1,32 +1,39 @@
 <script lang="ts">
-    import SunIcon from "@lucide/svelte/icons/sun";
-    import MoonIcon from "@lucide/svelte/icons/moon";
+    import { onMount } from "svelte";
+    import * as Select from "$lib/components/ui/select/index.js";
+    import { setMode, resetMode } from "mode-watcher";
 
-    import { resetMode, setMode } from "mode-watcher";
-    import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
-    import { buttonVariants } from "$lib/components/ui/button/index.js";
+    // default to system to prevent hydration mismatch or flash
+    let theme = $state<"light" | "dark" | "system">("system");
+
+    onMount(() => {
+        // specific to mode-watcher: checks if a user preference is saved
+        const savedTheme = localStorage.getItem("mode-watcher-mode");
+
+        if (savedTheme === "light" || savedTheme === "dark") {
+            theme = savedTheme;
+        } else {
+            theme = "system";
+        }
+    });
+
+    function onThemeChange(value: string) {
+        theme = value as "light" | "dark" | "system";
+        if (value === "system") {
+            resetMode();
+        } else {
+            setMode(value as "light" | "dark");
+        }
+    }
 </script>
 
-<DropdownMenu.Root>
-    <DropdownMenu.Trigger
-        class={buttonVariants({ variant: "outline", size: "icon" })}
-    >
-        <SunIcon
-            class="transition-all! h-[1.2rem] w-[1.2rem] rotate-0 scale-100 dark:-rotate-90 dark:scale-0"
-        />
-        <MoonIcon
-            class="transition-all! absolute h-[1.2rem] w-[1.2rem] rotate-90 scale-0 dark:rotate-0 dark:scale-100"
-        />
-        <span class="sr-only">Toggle theme</span>
-    </DropdownMenu.Trigger>
-    <DropdownMenu.Content align="end">
-        <DropdownMenu.Item onclick={() => setMode("light")}
-            >Light</DropdownMenu.Item
-        >
-        <DropdownMenu.Item onclick={() => setMode("dark")}
-            >Dark</DropdownMenu.Item
-        >
-        <DropdownMenu.Item onclick={() => resetMode()}>System</DropdownMenu.Item
-        >
-    </DropdownMenu.Content>
-</DropdownMenu.Root>
+<Select.Root type="single" value={theme} onValueChange={onThemeChange}>
+    <Select.Trigger class="w-[180px]">
+        {theme.charAt(0).toUpperCase() + theme.slice(1)}
+    </Select.Trigger>
+    <Select.Content>
+        <Select.Item value="light">Light</Select.Item>
+        <Select.Item value="dark">Dark</Select.Item>
+        <Select.Item value="system">System</Select.Item>
+    </Select.Content>
+</Select.Root>

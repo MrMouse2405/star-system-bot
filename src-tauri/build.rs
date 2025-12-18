@@ -15,15 +15,8 @@ mod model {
     use std::time::Duration;
 
     pub const MODEL_OUTPUT_DIR: &str = "model";
-    const SPM_URL: &str = "https://huggingface.co/facebook/m2m100_418M/resolve/main/sentencepiece.bpe.model?download=true";
-    const M2M100_URL: &str =
-        "https://huggingface.co/facebook/m2m100_418M/resolve/main/rust_model.ot?download=true";
-    const VOCAB_URL: &str =
-        "https://huggingface.co/facebook/m2m100_418M/resolve/main/vocab.json?download=true";
-    const CONFIG_URL: &str =
-        "https://huggingface.co/facebook/m2m100_418M/resolve/main/config.json?download=true";
     const QWEN3_URL: &str =
-        "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q5_K_M.gguf?download=true";
+        "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf?download=true";
 
     struct ModelFile<'a> {
         filename: &'a str,
@@ -31,28 +24,10 @@ mod model {
     }
 
     pub fn download_model_files() {
-        let files = vec![
-            ModelFile {
-                filename: "sentencepiece.bpe.model",
-                url: SPM_URL,
-            },
-            ModelFile {
-                filename: "rust_model.ot",
-                url: M2M100_URL,
-            },
-            ModelFile {
-                filename: "vocab.json",
-                url: VOCAB_URL,
-            },
-            ModelFile {
-                filename: "config.json",
-                url: CONFIG_URL,
-            },
-            ModelFile {
-                filename: "Qwen3-8B-Q5_K_M.gguf",
-                url: QWEN3_URL,
-            },
-        ];
+        let files = vec![ModelFile {
+            filename: "Qwen3-8B-Q4_K_M.gguf",
+            url: QWEN3_URL,
+        }];
 
         // 1. Create directory if it doesn't exist
         let output_dir = Path::new(MODEL_OUTPUT_DIR);

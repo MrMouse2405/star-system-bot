@@ -27,7 +27,6 @@
 	}
 </script>
 
-<ModeWatcher />
 <Sidebar.Provider>
 	<AppSidebar />
 	<Sidebar.Inset class="flex flex-col h-screen">
@@ -48,6 +47,7 @@
 			</div>
 		</header>
 		<main class="flex-1 min-h-0">
+			<ModeWatcher />
 			{@render children?.()}
 		</main>
 	</Sidebar.Inset>
