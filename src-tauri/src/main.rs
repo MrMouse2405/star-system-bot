@@ -288,7 +288,7 @@ async fn join_channel(
     tracing::info!("Joining channel {}", &broadcaster_login);
 
     // 1. Extract Credentials properly using Locks
-    let (client_id, access_token) = {
+    let (_, access_token) = {
         let id_lock = state.client_id.lock().map_err(|_| "Lock poisoned")?;
         let secret_lock = state.client_secret.lock().map_err(|_| "Lock poisoned")?;
 

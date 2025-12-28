@@ -9,7 +9,6 @@
     import * as Field from "$lib/components/ui/field/index";
     import { Input } from "$lib/components/ui/input/index";
     import * as Alert from "$lib/components/ui/alert/index";
-    import { Skeleton } from "$lib/components/ui/skeleton/index";
     import * as Avatar from "$lib/components/ui/avatar";
 
     // Icons
@@ -40,12 +39,13 @@
     let chatLogs = $state<ChatLog[]>([]);
     let unlisten: (() => void) | undefined;
 
-    // --- NEW: Helper to start listening (used by join and restore) ---
     async function startChatListener() {
         if (unlisten) unlisten(); // Clear existing if any
 
         unlisten = await listen<ChatLog>("chat-event", (event) => {
-            chatLogs = [...chatLogs, event.payload].slice(-50);
+            // Append new payload, then slice the last 20 elements
+            // This creates a revolving buffer of size 20
+            chatLogs = [...chatLogs, event.payload].slice(-20);
             scrollToBottom();
         });
     }
@@ -54,7 +54,6 @@
         try {
             const isValid = await invoke<boolean>("check_auth_status");
             if (isValid) {
-                // --- NEW: Check if we are already in a channel ---
                 const alreadyActive = await invoke<boolean>("is_in_channel");
 
                 if (alreadyActive) {

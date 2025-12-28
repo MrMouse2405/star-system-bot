@@ -1,3 +1,6 @@
+use std::env;
+use std::path::PathBuf;
+
 use anyhow::Context;
 use anyhow::Result;
 use std::num::NonZeroU32;
@@ -19,6 +22,8 @@ use crate::slang_jp;
 use crate::slang_zh;
 use crate::TranslationModelState;
 use crate::TranslationResponse;
+
+const QWEN_MODEL_NAME: &str = "Qwen3-1.7B-Q8_0.gguf";
 
 // --- WRAPPER FOR THREAD SAFETY ---
 // We wrap LlamaContext to implement Send + Sync manually.
@@ -70,13 +75,54 @@ pub fn initialize_llama_context(
     Ok(ThreadSafeContext(static_ctx))
 }
 
+// ---------------------------------------------------------------------------
+// OPTION A: THE "FLATPAK HACK" (Active only when --features flatpak is used)
+// ---------------------------------------------------------------------------
+#[cfg(feature = "flatpak")]
 pub fn initialize_llm_from_app_handle(
     app_handle: &tauri::AppHandle,
     backend: &LlamaBackend,
 ) -> Result<LlamaModel> {
+    println!("DEBUG: Initializing LLM using FLATPAK logic");
+
+    // 1. Get the path of the actual running binary inside Flatpak (/app/bin/start-bot)
+    let exe_path = env::current_exe().context("Failed to get current exe path")?;
+
+    // 2. Get the parent folder (/app/bin)
+    let exe_dir = exe_path.parent().context("Failed to get exe parent dir")?;
+
+    // 3. Manually construct the path to the model (/app/bin/model/Qwen...)
+    let model_path = exe_dir.join("model").join(QWEN_MODEL_NAME);
+
+    println!("DEBUG: Looking for model at: {:?}", model_path);
+
+    if !model_path.exists() {
+        return Err(anyhow::anyhow!("Model file not found at: {:?}", model_path));
+    }
+
+    let params = LlamaModelParams::default().with_n_gpu_layers(999);
+    let model = LlamaModel::load_from_file(backend, &model_path, &params)
+        .context("Failed to load Qwen model from file")?;
+
+    Ok(model)
+}
+
+// ---------------------------------------------------------------------------
+// OPTION B: THE "STANDARD TAURI" WAY (Active by default)
+// ---------------------------------------------------------------------------
+#[cfg(not(feature = "flatpak"))]
+pub fn initialize_llm_from_app_handle(
+    app_handle: &tauri::AppHandle,
+    backend: &LlamaBackend,
+) -> Result<LlamaModel> {
+    println!("DEBUG: Initializing LLM using STANDARD TAURI logic");
+
     let model_path = app_handle
         .path()
-        .resolve("model/Qwen3-8B-Q4_K_M.gguf", BaseDirectory::Resource)
+        .resolve(
+            format!("model/{}", QWEN_MODEL_NAME),
+            BaseDirectory::Resource,
+        )
         .context("Failed to resolve path to Qwen model")?;
 
     let params = LlamaModelParams::default().with_n_gpu_layers(999);
@@ -99,15 +145,30 @@ pub fn localize_with_qwen(
     let n_ctx = NonZeroU32::new(2048).unwrap();
 
     let prompt = format!(
+        //         r#"<|im_start|>system
+        // Localize {language} gaming chat to natural, informal English.
+        // Adapt slang/idioms to Western gaming terms (e.g., 'lol', 'choke', 'clutch').
+        // Maintain the user's tone. If the text only includes link, ignore it and
+        // reply with '<ignore>'. If the text is unclear to translate, reply with
+        // '<ignore>'. If the translation is too harsh, tone it down.
+        // Otherwise, output translation only.<|im_end|>
+        // <|im_start|>user
+        // {raw_input}
+        // <|im_end|>
+        // <|im_start|>assistant"#,
         r#"<|im_start|>system
-Localize {language} gaming chat to natural, informal English.
+If the text is in English, reply with '<@>' exactly.
+Localize gaming chat to natural, informal English.
 Adapt slang/idioms to Western gaming terms (e.g., 'lol', 'choke', 'clutch').
-Maintain the user's tone. Output translation only.<|im_end|>
+Maintain the user's tone. If the text only includes link, ignore it and
+reply with '<@>' exactly. If the text is unclear to translate, reply with
+'<@>' exactly. If the translation is too harsh, tone it down. 
+Otherwise, output translation or '<@>' exactly only.<|im_end|>
 <|im_start|>user
 {raw_input}
 <|im_end|>
 <|im_start|>assistant"#,
-        language = source_lang,
+        // language = source_lang,
         raw_input = raw_text
     );
 
@@ -126,7 +187,7 @@ Maintain the user's tone. Output translation only.<|im_end|>
     ctx.decode(&mut batch).context("Failed to decode prompt")?;
 
     let mut response_bytes = Vec::<u8>::with_capacity(4096);
-    let max_new_tokens = 1024;
+    let max_new_tokens = 2048;
     let mut n_curr = batch.n_tokens();
 
     for _ in 0..max_new_tokens {
@@ -158,7 +219,9 @@ Maintain the user's tone. Output translation only.<|im_end|>
 
     let full_response = String::from_utf8_lossy(&response_bytes).to_string();
 
-    let clean_output = if let Some(end_tag_pos) = full_response.find("</think>") {
+    let clean_output = if let Some(_) = full_response.find("<@>") {
+        String::new()
+    } else if let Some(end_tag_pos) = full_response.find("</think>") {
         let start_of_text = end_tag_pos + 8;
         if start_of_text < full_response.len() {
             full_response[start_of_text..].to_string()
@@ -276,7 +339,7 @@ fn is_universal_slang(text: &str) -> bool {
             "LMAO" | "LMFAO" | "LOL" | "ROFL" | "LUL" | "KEKW" | "OMEGALUL" | "POG" | "POGGERS"
             | "POGCHAMP" | "KAPPA" | "MONKAW" | "MONKAS" | "PEPELAUGH" | "SADGE" | "BRUH"
             | "WTF" | "OMG" | "IDK" | "XD" | "XDD" | "HA" | "HAHA" | "HAHAHA" | "JAJA"
-            | "JAJAJA" | "MDR" | "L" => true,
+            | "JAJAJA" | "MDR" | "L" | "FTFY" | "ERM" => true,
             _ => false,
         }
     })

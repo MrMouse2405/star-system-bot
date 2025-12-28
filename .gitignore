@@ -9,3 +9,7 @@ node_modules
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 src-tauri/model
+.flatpak-builder
+.vscode
+build_dir
+repo

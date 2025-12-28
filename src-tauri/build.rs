@@ -15,8 +15,9 @@ mod model {
     use std::time::Duration;
 
     pub const MODEL_OUTPUT_DIR: &str = "model";
-    const QWEN3_URL: &str =
-        "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf?download=true";
+    // const QWEN3_URL: &str =
+    //     "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf?download=true";
+    const QWEN3_URL : &str = "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf?download=true";
 
     struct ModelFile<'a> {
         filename: &'a str,
@@ -25,7 +26,7 @@ mod model {
 
     pub fn download_model_files() {
         let files = vec![ModelFile {
-            filename: "Qwen3-8B-Q4_K_M.gguf",
+            filename: "Qwen3-1.7B-Q8_0.gguf",
             url: QWEN3_URL,
         }];
 
